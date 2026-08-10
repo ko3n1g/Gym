@@ -44,6 +44,7 @@ class ResolvedComponent:
     name: str
     implementation: str
     boundary: str
+    entrypoint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,7 @@ def resolve_composition(config_path: Path) -> ResolvedComposition:
                 name=resources_instance.name,
                 implementation=resources_server or "",
                 boundary="resources_servers",
+                entrypoint=str(resources_instance.get_inner_run_server_config().entrypoint),
             )
         )
     components.append(
@@ -186,6 +188,7 @@ def resolve_composition(config_path: Path) -> ResolvedComposition:
             name=selected_agent.name,
             implementation=agent_server,
             boundary="responses_api_agents",
+            entrypoint=str(selected_agent.get_inner_run_server_config().entrypoint),
         )
     )
     if model_server:
@@ -201,6 +204,11 @@ def resolve_composition(config_path: Path) -> ResolvedComposition:
                 name=str(model_server),
                 implementation=model_implementation,
                 boundary="responses_api_models",
+                entrypoint=(
+                    str(model_instance.get_inner_run_server_config().entrypoint)
+                    if model_instance is not None
+                    else None
+                ),
             )
         )
 

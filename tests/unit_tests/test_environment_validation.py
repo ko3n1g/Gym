@@ -132,6 +132,7 @@ def test_reports_resolved_composition_and_declared_profile(tmp_path: Path) -> No
         ("agent_server", "simple_agent"),
         ("model_server", "runtime-selected"),
     ]
+    assert report.components[0].entrypoint == "app.py"
 
 
 def test_benchmark_uses_root_prompt_without_executing_prepare(tmp_path: Path) -> None:

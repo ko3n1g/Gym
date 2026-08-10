@@ -4,7 +4,7 @@ description: ""
 ---
 An environment consists of three components: Agents, Models, and Resources. Most contributors will create new resources servers while using existing agent server and model server implementations. If you need to create custom agents or models, you can reference the implementations in `responses_api_agents/` and `responses_api_models/`.
 
-This guide focuses on the resources server contribution process.
+The onboarding flow below covers a complete environment or benchmark. The later resources-server requirements apply when that workload introduces a new scorer; they are not required when reusing one.
 
 <Tip>
 For a guide to building your first resources server, refer to [Single Step Environment](/environment-tutorials/single-step-environment).
@@ -24,26 +24,26 @@ The manifest is the place to read this declaration, but not every field is autho
 | Composition: `resources_server`, `agent_server`, `model_server`, `datasets`, `rollout_driver`, and `grading_mode` | Gym config; mirrored read-only in the manifest |
 | Benchmark protocol: `canonical_split` and `standard_prompt_config` | Manifest |
 
-When composition changes, edit the Gym config and update its manifest mirror. The runtime continues to resolve and execute the config; it does not use the manifest as a second wiring system. `version` follows Semantic Versioning and identifies the resolved composition rather than the text of the manifest alone.
+When composition changes, edit the Gym config and update its manifest mirror. The runtime continues to resolve and execute the config; it does not use the manifest as a second wiring system. `version` follows Semantic Versioning and is intended to identify the resolved composition rather than the manifest text alone. Validation reports the version but does not yet enforce immutable composition or require version bumps.
 
 ### Integration Profiles
 
 `integration_profile` classifies where the episode is driven. `stock-loop` is the default path; the other profiles describe three existing extension points.
 
-| Profile | Use when | Additional component requirement |
-| --- | --- | --- |
-| `stock-loop` | Gym drives the standard agent loop and only the model's answers are measured | `model_server` |
-| `measured-loop` | Authored agent behavior, such as browsing or planning strategy, is part of the measurement | `model_server` |
-| `external-loop` | An external framework owns the episode and adapts its result back to Gym | None |
-| `custom-driver` | Bespoke rollout coordination runs above the agent | `rollout_driver` |
+| Profile | Use when | Additional requirement | Generated extension point |
+| --- | --- | --- | --- |
+| `stock-loop` | Gym drives the standard agent loop and only the model's answers are measured | `model_server` | None |
+| `measured-loop` | Authored agent behavior, such as browsing or planning strategy, is part of the measurement | `model_server` | Agent `responses()` |
+| `external-loop` | An external framework owns the episode and adapts its result back to Gym | None | Agent `run()` |
+| `custom-driver` | Bespoke rollout coordination runs above the agent | `rollout_driver` | Rollout-driver module |
 
 Every profile also requires a `resources_server`, an `agent_server`, and at least one dataset. `rollout_driver` is valid only for `custom-driver`. A benchmark additionally requires `canonical_split`, `standard_prompt_config`, and at least one benchmark dataset with `prepare_script`; its dataset-level `prompt_config` remains optional.
 
-The profile is an authored classification, not a runtime dispatcher. This initial contract does not infer a profile from configuration, resolve concrete component versions, declare capabilities, derive which components are pinned or swappable, enforce component swaps, or validate `grading_mode` against a resources server's vocabulary. Runtime behavior remains config-driven.
+The profile is an authored classification, not a runtime dispatcher. Validation does not currently infer a profile from configuration, resolve concrete component versions, declare capabilities, derive which components are pinned or swappable, enforce component swaps, or validate `grading_mode` against a resources server's vocabulary. Runtime behavior remains config-driven.
 
 ## Validation Layers
 
-Environment validation is progressive. Manifest conformance checks the workload declaration. A static onboarding preflight checks whether that declaration matches the repository configuration. Verifier fixtures exercise representative scoring behavior, while evaluation runs and reward profiling establish runtime behavior and grading quality.
+Environment validation is progressive. Manifest conformance checks the workload declaration. A static onboarding preflight checks whether that declaration matches the repository configuration. Verifier fixtures exercise representative scoring behavior, while evaluation runs and reward profiling provide runtime and reward evidence.
 
 The static preflight runs without starting the workload. It:
 
@@ -55,18 +55,42 @@ The static preflight runs without starting the workload. It:
 
 With synchronization enabled, it writes corrected composition mirrors atomically only after every static check passes. Authored metadata remains unchanged.
 
-It does not import components, start services, execute preparation code, call a model, or run an evaluation. Component versions and capabilities, profile inference and pinning, and `adopted_from` source resolution are deferred from this initial static preflight. Scorer behavior and grading quality require the later validation layers.
+It does not import components, start services, execute preparation code, call a model, or run an evaluation. It also does not resolve component versions or capabilities, infer or enforce profiles, or resolve `adopted_from` sources. Scorer behavior and grading quality require the later validation layers.
+
+## Onboarding Commands
+
+Search the local catalog before creating a workload, then scaffold, validate, and test it:
+
+```bash
+gym search "task description"
+gym env init --environment my_eval --profile stock-loop
+gym env validate my_eval
+gym env test my_eval
+```
+
+The scaffold creates a manifest, Gym config, sample data, and README. Names that create Python components must be lowercase Python identifiers. Benchmarks also receive source data, a prompt, and a `prepare()` function. A new scorer adds a resources server and verifier fixture. Non-stock templates expose the selected extension point but initially delegate to existing stock behavior; replace their generated TODO before review.
+
+To reuse a scorer that already exports the verifier-fixture contract, declare its reward contract instead of copying its implementation:
+
+```bash
+gym env init --benchmark my_benchmark --profile stock-loop \
+  --reuse-verifier existing_scorer --reward-range 0 1 --higher-is-better
+```
+
+Scaffolding is non-destructive: an identical rerun is a no-op, and any conflicting file aborts the complete write set. `gym env validate --sync NAME` updates only mirrored composition fields after all static checks pass. `gym env test --update-expected NAME` updates fixture rewards only after every behavioral check passes.
+
+`gym list environments` and unqualified `gym search` read manifests and legacy configs together. Manifest-backed entries are `experimental`; unmigrated entries are labeled `no-manifest`, keeping the catalog complete during migration. Certificate-backed `validated` status is not emitted yet. Adding a reviewed manifest enriches catalog metadata without changing how Gym runs the workload.
 
 ## Verifier Fixture Contract
 
 The resources server owns and exports one `VERIFIER_FIXTURE`, so every workload that reuses the scorer also reuses its scoring tests. The fixture requires three cases, plus a fourth when the manifest declares `seeded`:
 
-- a full-reward case that reaches the declared upper endpoint;
-- a zero-reward case that reaches the declared lower endpoint;
+- a full-reward case that reaches the better endpoint declared by `higher_is_better`;
+- a zero-reward case that reaches the opposite endpoint;
 - a malformed request that fails as declared; and
 - for a seeded environment, the same request producing the same reward after an explicit reseed on fresh server instances.
 
-Fixture execution is in-process and does not start Gym services. Updating expected rewards is explicit and atomic; range, endpoint, malformed-input, and determinism checks still apply. Static discovery checks that a resources-server entrypoint declares the fixture; executing it verifies the contract. A shared fixture attests the scorer itself, so a workload that overrides `grading_mode` needs workload-specific cases.
+Fixture execution runs directly in the resources server's dependency environment and does not start Gym services or Ray. The first run prepares that environment in the same way as existing server tests. Updating expected rewards is explicit and atomic; range, endpoint, malformed-input, and determinism checks still apply. `gym env init --reuse-verifier` checks that the selected resources-server entrypoint declares a fixture, and `gym env test` executes it. A shared fixture attests the scorer itself, so a workload that overrides `grading_mode` needs workload-specific cases.
 
 ## Guiding Principles
 
