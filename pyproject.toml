@@ -373,6 +373,7 @@ exclude-dependencies = [
 # train/validation JSONL is intentionally not committed to git, so it is excluded automatically.
 # Only nemo_gym's own non-package resource scripts need an explicit entry here.
 nemo_gym = ["resources/*.py"]
+"nemo_gym.environment" = ["schemas/*.json"]
 
 [tool.setuptools.dynamic]
 version = {attr = "nemo_gym.__version__"}
